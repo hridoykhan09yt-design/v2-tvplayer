@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live TV Player v2</title>
+    <title>Live TV Player v2.1</title>
     <style>
         html, body {
             margin: 0;
@@ -117,7 +117,6 @@
 
 <script>
 let hls;
-// অল্টারনেটিভ অল-ইন-ওয়ান প্রক্সি
 const PROXY_URL = "https://api.allorigins.win/raw?url="; 
 
 function playStream(url) {
@@ -127,14 +126,18 @@ function playStream(url) {
         hls.destroy();
     }
 
+    // প্রথম দফায় সরাসরি লিংকটি প্লে করার চেষ্টা করবে
     let finalUrl = url;
-    // শুধু মাত্র HTTP লিংক হলে ব্রাউজারের Mixed Content ব্লক এড়াতে প্রক্সি ব্যবহার হবে
+
+    // যদি সাইট HTTPS হয় আর ভিডিও লিংক HTTP হয়, তবে শুরুতেই প্রক্সি দিয়ে বাইপাস করার চেষ্টা করবে
     if (url.startsWith("http://") && location.protocol === "https:") {
         finalUrl = PROXY_URL + encodeURIComponent(url);
     }
 
     if (Hls.isSupported()) {
         hls = new Hls({
+            enableWorker: true,
+            lowLatencyMode: true,
             xhrSetup: function (xhr, src) {
                 xhr.withCredentials = false;
             }
@@ -142,18 +145,24 @@ function playStream(url) {
         hls.loadSource(finalUrl);
         hls.attachMedia(video);
         
+        // যদি সরাসরি বা প্রথম প্রক্সিতে ফেল মারে, তবে অল্টারনেটিভ প্রক্সি সেট করবে
         hls.on(Hls.Events.ERROR, function (event, data) {
-            if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR && !finalUrl.startsWith(PROXY_URL)) {
-                console.log("Stream failed directly, trying with backup proxy...");
-                finalUrl = PROXY_URL + encodeURIComponent(url);
-                hls.loadSource(finalUrl);
+            if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                if (!finalUrl.includes("corsproxy.io")) {
+                    console.log("Stream failed, trying fallback CORS bypass...");
+                    finalUrl = "https://corsproxy.io/?" + encodeURIComponent(url);
+                    hls.loadSource(finalUrl);
+                } else {
+                    hls.destroy();
+                    alert("This channel cannot be played in a web browser due to strict server restrictions. It only works in VLC/Apps.");
+                }
             }
         });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = finalUrl;
     }
 
-    video.play().catch(e => console.log("Playback intent received"));
+    video.play().catch(e => console.log("Playback interaction handled."));
 }
 
 async function loadPlaylist() {
@@ -164,16 +173,12 @@ async function loadPlaylist() {
         return;
     }
 
-    // ১ম চেষ্টা: সরাসরি লোড করার ট্রাই (যেমনটা আগের প্লেলিস্টে হতো)
     try {
         const response = await fetch(url);
         if (!response.ok) throw new Error('Direct fetch failed');
         const text = await response.text();
         parseM3U(text);
     } catch (e) {
-        console.log("Direct load failed (CORS), trying with fallback proxy...");
-        
-        // ২য় চেষ্টা: সরাসরি ফেইল হলে ব্যাকআপ প্রক্সি দিয়ে ট্রাই করবে
         try {
             const targetUrl = PROXY_URL + encodeURIComponent(url);
             const response = await fetch(targetUrl);
@@ -182,7 +187,7 @@ async function loadPlaylist() {
             parseM3U(text);
         } catch (proxyError) {
             console.error(proxyError);
-            alert("Playlist Load Failed! Check if the link is active.");
+            alert("Playlist Load Failed!");
         }
     }
 }
@@ -221,7 +226,7 @@ function parseM3U(content) {
     }
     
     if(list.children.length === 0){
-        alert("No channels found in this playlist.");
+        alert("No channels found.");
     }
 }
 </script>
