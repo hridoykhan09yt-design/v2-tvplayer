@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live TV Player v2.1</title>
+    <title>Live TV Player v2.5</title>
     <style>
         html, body {
             margin: 0;
             padding: 0;
             overflow: hidden;
             font-family: Arial, sans-serif;
+            background: #000;
         }
 
         .live-wrapper {
@@ -20,7 +21,6 @@
             height: 100vh;
             display: flex;
             background: #111;
-            z-index: 999999;
         }
 
         .channel-list {
@@ -28,6 +28,8 @@
             background: #181818;
             overflow-y: auto;
             border-right: 2px solid #333;
+            display: flex;
+            flex-direction: column;
         }
 
         .channel-header {
@@ -37,18 +39,26 @@
             font-size: 22px;
             text-align: center;
             font-weight: bold;
+            border-bottom: 1px solid #333;
+        }
+
+        #channelList {
+            flex: 1;
+            overflow-y: auto;
         }
 
         .channel {
             padding: 15px;
-            color: #fff;
-            border-bottom: 1px solid #333;
+            color: #ccc;
+            border-bottom: 1px solid #252525;
             cursor: pointer;
-            transition: background 0.2s;
+            transition: all 0.2s;
+            font-size: 14px;
         }
 
         .channel:hover {
             background: #333;
+            color: #fff;
         }
 
         .player-section {
@@ -63,16 +73,22 @@
             padding: 10px;
             gap: 10px;
             background: #111;
+            border-bottom: 1px solid #333;
         }
 
         .topbar input {
             flex: 1;
             padding: 12px;
-            font-size: 16px;
+            font-size: 15px;
             background: #222;
             border: 1px solid #444;
             color: #fff;
             border-radius: 4px;
+            outline: none;
+        }
+
+        .topbar input:focus {
+            border-color: #007bff;
         }
 
         .topbar button {
@@ -83,6 +99,7 @@
             border: none;
             font-weight: bold;
             border-radius: 4px;
+            transition: background 0.2s;
         }
 
         .topbar button:hover {
@@ -91,7 +108,7 @@
 
         #player {
             width: 100%;
-            height: calc(100vh - 60px);
+            height: calc(100vh - 65px);
             background: #000;
         }
     </style>
@@ -117,7 +134,6 @@
 
 <script>
 let hls;
-const PROXY_URL = "https://api.allorigins.win/raw?url="; 
 
 function playStream(url) {
     const video = document.getElementById("player");
@@ -126,13 +142,7 @@ function playStream(url) {
         hls.destroy();
     }
 
-    // প্রথম দফায় সরাসরি লিংকটি প্লে করার চেষ্টা করবে
-    let finalUrl = url;
-
-    // যদি সাইট HTTPS হয় আর ভিডিও লিংক HTTP হয়, তবে শুরুতেই প্রক্সি দিয়ে বাইপাস করার চেষ্টা করবে
-    if (url.startsWith("http://") && location.protocol === "https:") {
-        finalUrl = PROXY_URL + encodeURIComponent(url);
-    }
+    console.log("Playing stream directly:", url);
 
     if (Hls.isSupported()) {
         hls = new Hls({
@@ -142,24 +152,28 @@ function playStream(url) {
                 xhr.withCredentials = false;
             }
         });
-        hls.loadSource(finalUrl);
+        hls.loadSource(url);
         hls.attachMedia(video);
         
-        // যদি সরাসরি বা প্রথম প্রক্সিতে ফেল মারে, তবে অল্টারনেটিভ প্রক্সি সেট করবে
         hls.on(Hls.Events.ERROR, function (event, data) {
-            if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                if (!finalUrl.includes("corsproxy.io")) {
-                    console.log("Stream failed, trying fallback CORS bypass...");
-                    finalUrl = "https://corsproxy.io/?" + encodeURIComponent(url);
-                    hls.loadSource(finalUrl);
-                } else {
-                    hls.destroy();
-                    alert("This channel cannot be played in a web browser due to strict server restrictions. It only works in VLC/Apps.");
+            if (data.fatal) {
+                switch (data.type) {
+                    case Hls.ErrorTypes.NETWORK_ERROR:
+                        console.log("Network error, trying to recover...");
+                        hls.startLoad();
+                        break;
+                    case Hls.ErrorTypes.MEDIA_ERROR:
+                        console.log("Media error, trying to recover...");
+                        hls.recoverMediaError();
+                        break;
+                    default:
+                        console.error("Unrecoverable error");
+                        break;
                 }
             }
         });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = finalUrl;
+        video.src = url;
     }
 
     video.play().catch(e => console.log("Playback interaction handled."));
@@ -173,21 +187,22 @@ async function loadPlaylist() {
         return;
     }
 
+    // কোনো প্রক্সি ছাড়াই সরাসরি আগের প্লেয়ারের মতো ফেচ করবে
     try {
         const response = await fetch(url);
-        if (!response.ok) throw new Error('Direct fetch failed');
+        if (!response.ok) throw new Error('Fetch failed');
         const text = await response.text();
         parseM3U(text);
     } catch (e) {
+        console.log("Direct load failed, trying with web-bypasser...");
+        // যদি সরাসরি ফেল মারে শুধুমাত্র তখনই অল-অরিজিন ব্যাকআপ ইউজ করবে
         try {
-            const targetUrl = PROXY_URL + encodeURIComponent(url);
-            const response = await fetch(targetUrl);
-            if (!response.ok) throw new Error('Proxy fetch failed');
+            const backupUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+            const response = await fetch(backupUrl);
             const text = await response.text();
             parseM3U(text);
-        } catch (proxyError) {
-            console.error(proxyError);
-            alert("Playlist Load Failed!");
+        } catch (err) {
+            alert("Failed to load playlist. Please check your internet or link active status.");
         }
     }
 }
@@ -226,7 +241,7 @@ function parseM3U(content) {
     }
     
     if(list.children.length === 0){
-        alert("No channels found.");
+        alert("No channels found in this playlist.");
     }
 }
 </script>
