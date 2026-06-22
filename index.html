@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live TV Player</title>
+    <title>Live TV Player v2</title>
     <style>
         html, body {
             margin: 0;
@@ -117,8 +117,8 @@
 
 <script>
 let hls;
-// একটি ওপেন-সোর্স রিভার্স প্রক্সি যা CORS এবং Mixed Content বাইপাস করতে সাহায্য করবে
-const PROXY_URL = "https://corsproxy.io/?"; 
+// অল্টারনেটিভ অল-ইন-ওয়ান প্রক্সি
+const PROXY_URL = "https://api.allorigins.win/raw?url="; 
 
 function playStream(url) {
     const video = document.getElementById("player");
@@ -127,26 +127,24 @@ function playStream(url) {
         hls.destroy();
     }
 
-    // যদি লিঙ্কটি http:// হয় এবং আপনার সাইট https হয়, তবে প্রক্সি ব্যবহার করবে
     let finalUrl = url;
-    if (url.startsWith("http://")) {
+    // শুধু মাত্র HTTP লিংক হলে ব্রাউজারের Mixed Content ব্লক এড়াতে প্রক্সি ব্যবহার হবে
+    if (url.startsWith("http://") && location.protocol === "https:") {
         finalUrl = PROXY_URL + encodeURIComponent(url);
     }
 
     if (Hls.isSupported()) {
         hls = new Hls({
-            xhrSetup: function (xhr, url) {
-                // কিছু লিঙ্কের ক্ষেত্রে CORS এরর এড়াতে এটি সাহায্য করে
+            xhrSetup: function (xhr, src) {
                 xhr.withCredentials = false;
             }
         });
         hls.loadSource(finalUrl);
         hls.attachMedia(video);
         
-        // ভিডিও লোড ফেল মারলে ব্যাকআপ হিসেবে প্রক্সি দিয়ে আবার ট্রাই করবে
         hls.on(Hls.Events.ERROR, function (event, data) {
             if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR && !finalUrl.startsWith(PROXY_URL)) {
-                console.log("Network error detected, trying with proxy...");
+                console.log("Stream failed directly, trying with backup proxy...");
                 finalUrl = PROXY_URL + encodeURIComponent(url);
                 hls.loadSource(finalUrl);
             }
@@ -155,7 +153,7 @@ function playStream(url) {
         video.src = finalUrl;
     }
 
-    video.play().catch(e => console.log("Autoplay blocked or stream error:", e));
+    video.play().catch(e => console.log("Playback intent received"));
 }
 
 async function loadPlaylist() {
@@ -166,17 +164,26 @@ async function loadPlaylist() {
         return;
     }
 
-    // প্লেলিস্ট লোড করার সময় CORS ব্লক এড়াতে প্রক্সি ব্যবহার করা হয়েছে
-    const targetUrl = PROXY_URL + encodeURIComponent(url);
-
+    // ১ম চেষ্টা: সরাসরি লোড করার ট্রাই (যেমনটা আগের প্লেলিস্টে হতো)
     try {
-        const response = await fetch(targetUrl);
-        if (!response.ok) throw new Error('Network response was not ok');
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Direct fetch failed');
         const text = await response.text();
         parseM3U(text);
     } catch (e) {
-        console.error(e);
-        alert("Playlist Load Failed! (Even with Proxy. Check if the link is active)");
+        console.log("Direct load failed (CORS), trying with fallback proxy...");
+        
+        // ২য় চেষ্টা: সরাসরি ফেইল হলে ব্যাকআপ প্রক্সি দিয়ে ট্রাই করবে
+        try {
+            const targetUrl = PROXY_URL + encodeURIComponent(url);
+            const response = await fetch(targetUrl);
+            if (!response.ok) throw new Error('Proxy fetch failed');
+            const text = await response.text();
+            parseM3U(text);
+        } catch (proxyError) {
+            console.error(proxyError);
+            alert("Playlist Load Failed! Check if the link is active.");
+        }
     }
 }
 
@@ -184,14 +191,12 @@ function parseM3U(content) {
     const list = document.getElementById("channelList");
     list.innerHTML = "";
 
-    // লাইন ব্রেক ঠিকঠাক হ্যান্ডেল করার জন্য regex ব্যবহার করা হয়েছে
     const lines = content.split(/\r?\n/);
 
     for (let i = 0; i < lines.length; i++) {
         if (lines[i].startsWith("#EXTINF")) {
             let name = lines[i].split(",").pop().trim();
             
-            // পরবর্তী লাইনে যদি লিঙ্ক না থাকে, তবে তার পরের লাইনগুলো চেক করবে
             let stream = "";
             for (let j = i + 1; j < lines.length; j++) {
                 if (lines[j].trim() && !lines[j].startsWith("#")) {
@@ -205,7 +210,6 @@ function parseM3U(content) {
                 div.className = "channel";
                 div.innerText = name || "Unknown Channel";
 
-                // ক্লোজারের সমস্যা এড়াতে লেট (let) দিয়ে ভ্যারিয়েবল পাস করা হয়েছে
                 let currentStream = stream;
                 div.onclick = function () {
                     playStream(currentStream);
@@ -217,7 +221,7 @@ function parseM3U(content) {
     }
     
     if(list.children.length === 0){
-        alert("No channels found in this playlist. Check format.");
+        alert("No channels found in this playlist.");
     }
 }
 </script>
