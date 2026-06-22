@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live TV Player</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+
+        .live-wrapper {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            background: #111;
+            z-index: 999999;
+        }
+
+        .channel-list {
+            width: 280px;
+            background: #181818;
+            overflow-y: auto;
+            border-right: 2px solid #333;
+        }
+
+        .channel-header {
+            padding: 15px;
+            background: #000;
+            color: #fff;
+            font-size: 22px;
+            text-align: center;
+            font-weight: bold;
+        }
+
+        .channel {
+            padding: 15px;
+            color: #fff;
+            border-bottom: 1px solid #333;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .channel:hover {
+            background: #333;
+        }
+
+        .player-section {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #000;
+        }
+
+        .topbar {
+            display: flex;
+            padding: 10px;
+            gap: 10px;
+            background: #111;
+        }
+
+        .topbar input {
+            flex: 1;
+            padding: 12px;
+            font-size: 16px;
+            background: #222;
+            border: 1px solid #444;
+            color: #fff;
+            border-radius: 4px;
+        }
+
+        .topbar button {
+            padding: 12px 20px;
+            cursor: pointer;
+            background: #007bff;
+            color: white;
+            border: none;
+            font-weight: bold;
+            border-radius: 4px;
+        }
+
+        .topbar button:hover {
+            background: #0056b3;
+        }
+
+        #player {
+            width: 100%;
+            height: calc(100vh - 60px);
+            background: #000;
+        }
+    </style>
+</head>
+<body>
+
+<div class="live-wrapper">
+    <div class="channel-list">
+        <div class="channel-header">📺 LIVE TV</div>
+        <div id="channelList"></div>
+    </div>
+
+    <div class="player-section">
+        <div class="topbar">
+            <input id="playlistUrl" type="text" placeholder="Paste M3U Playlist URL Here">
+            <button onclick="loadPlaylist()">Load Playlist</button>
+        </div>
+        <video id="player" controls autoplay playsinline></video>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+
+<script>
+let hls;
+// একটি ওপেন-সোর্স রিভার্স প্রক্সি যা CORS এবং Mixed Content বাইপাস করতে সাহায্য করবে
+const PROXY_URL = "https://corsproxy.io/?"; 
+
+function playStream(url) {
+    const video = document.getElementById("player");
+
+    if (hls) {
+        hls.destroy();
+    }
+
+    // যদি লিঙ্কটি http:// হয় এবং আপনার সাইট https হয়, তবে প্রক্সি ব্যবহার করবে
+    let finalUrl = url;
+    if (url.startsWith("http://")) {
+        finalUrl = PROXY_URL + encodeURIComponent(url);
+    }
+
+    if (Hls.isSupported()) {
+        hls = new Hls({
+            xhrSetup: function (xhr, url) {
+                // কিছু লিঙ্কের ক্ষেত্রে CORS এরর এড়াতে এটি সাহায্য করে
+                xhr.withCredentials = false;
+            }
+        });
+        hls.loadSource(finalUrl);
+        hls.attachMedia(video);
+        
+        // ভিডিও লোড ফেল মারলে ব্যাকআপ হিসেবে প্রক্সি দিয়ে আবার ট্রাই করবে
+        hls.on(Hls.Events.ERROR, function (event, data) {
+            if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR && !finalUrl.startsWith(PROXY_URL)) {
+                console.log("Network error detected, trying with proxy...");
+                finalUrl = PROXY_URL + encodeURIComponent(url);
+                hls.loadSource(finalUrl);
+            }
+        });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = finalUrl;
+    }
+
+    video.play().catch(e => console.log("Autoplay blocked or stream error:", e));
+}
+
+async function loadPlaylist() {
+    const url = document.getElementById("playlistUrl").value.trim();
+
+    if (!url) {
+        alert("Paste M3U Playlist URL");
+        return;
+    }
+
+    // প্লেলিস্ট লোড করার সময় CORS ব্লক এড়াতে প্রক্সি ব্যবহার করা হয়েছে
+    const targetUrl = PROXY_URL + encodeURIComponent(url);
+
+    try {
+        const response = await fetch(targetUrl);
+        if (!response.ok) throw new Error('Network response was not ok');
+        const text = await response.text();
+        parseM3U(text);
+    } catch (e) {
+        console.error(e);
+        alert("Playlist Load Failed! (Even with Proxy. Check if the link is active)");
+    }
+}
+
+function parseM3U(content) {
+    const list = document.getElementById("channelList");
+    list.innerHTML = "";
+
+    // লাইন ব্রেক ঠিকঠাক হ্যান্ডেল করার জন্য regex ব্যবহার করা হয়েছে
+    const lines = content.split(/\r?\n/);
+
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].startsWith("#EXTINF")) {
+            let name = lines[i].split(",").pop().trim();
+            
+            // পরবর্তী লাইনে যদি লিঙ্ক না থাকে, তবে তার পরের লাইনগুলো চেক করবে
+            let stream = "";
+            for (let j = i + 1; j < lines.length; j++) {
+                if (lines[j].trim() && !lines[j].startsWith("#")) {
+                    stream = lines[j].trim();
+                    break;
+                }
+            }
+
+            if (stream) {
+                let div = document.createElement("div");
+                div.className = "channel";
+                div.innerText = name || "Unknown Channel";
+
+                // ক্লোজারের সমস্যা এড়াতে লেট (let) দিয়ে ভ্যারিয়েবল পাস করা হয়েছে
+                let currentStream = stream;
+                div.onclick = function () {
+                    playStream(currentStream);
+                };
+
+                list.appendChild(div);
+            }
+        }
+    }
+    
+    if(list.children.length === 0){
+        alert("No channels found in this playlist. Check format.");
+    }
+}
+</script>
+
+</body>
+</html>
